@@ -119,3 +119,184 @@ phases:
       - docker push ${ECR_IMAGE_URI}
 ```
 
+# AWS Taks Defination
+-  name
+- image URL
+- container Port
+- Envirnoment Variable Apps Envirnoment {FARGETE, EC2}, CPU, Memory, TAKS Role, STORAGE, Managing Logging , revision:1
+# ECS Cluster
+- name
+- VPC
+- Subnet
+- ec2 autoscaing group
+- Monitoring 
+# AWS Service
+- Capcity provider strategy
+- Deployment Configuration
+    - service
+    - task defination
+    - rolling update
+    - name
+    - LB
+# Create a stage deploy use imagedefinitions.json file in deploye of ECS Deploye and upadte build file 
+```
+version: 0.2
+env:
+  variables:
+    ECR_REPO_NAME: my-angular-app
+  parameter-store:
+    DOCKERHUB_TOKEN: /dockerhub/token
+    DOCKERHUB_USER: /dockerhub/user
+phases:
+  pre_build:
+    commands:
+      # Docker Hub login
+      - echo ${DOCKERHUB_TOKEN} | docker login -u ${DOCKERHUB_USER} --password-stdin 
+      
+      # ECR login
+      - ECR_MAIN_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+      - aws ecr get-login-password --region ${AWS_REGION} | docker login -u AWS --password-stdin ${ECR_MAIN_URI}
+
+      - ECR_IMAGE_URI="${ECR_MAIN_URI}/${ECR_REPO_NAME}:latest"
+  build:
+    commands:
+      - docker build -t my-angular-app:latest .
+  post_build:
+    commands:
+      - docker tag my-angular-app:latest ${ECR_IMAGE_URI}
+      - docker push ${ECR_IMAGE_URI}
+
+      # Generate image definitions file for ECS
+      - printf '[{"name":"angular-app","imageUri":"%s"}]' ${ECR_IMAGE_URI} > imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
+```
+- **Use Git Commit ID for Image Tags**
+
+
+```
+version: 0.2
+env:
+  variables:
+    ECR_REPO_NAME: my-angular-app
+  parameter-store:
+    DOCKERHUB_TOKEN: /dockerhub/token
+    DOCKERHUB_USER: /dockerhub/user
+phases:
+  pre_build:
+    commands:
+      # Docker Hub login
+      - echo ${DOCKERHUB_TOKEN} | docker login -u ${DOCKERHUB_USER} --password-stdin 
+      
+      # ECR login
+      - ECR_MAIN_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+      - aws ecr get-login-password --region ${AWS_REGION} | docker login -u AWS --password-stdin ${ECR_MAIN_URI}
+
+      - ECR_IMAGE_URI="${ECR_MAIN_URI}/${ECR_REPO_NAME}:latest { GET it From TAG ID}"
+  build:
+    commands:
+      - docker build -t my-angular-app:latest .
+  post_build:
+    commands:
+      - docker tag my-angular-app:latest ${ECR_IMAGE_URI}
+      - docker push ${ECR_IMAGE_URI}
+
+      # Generate image definitions file for ECS
+      - printf '[{"name":"angular-app","imageUri":"%s"}]' ${ECR_IMAGE_URI} > imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
+
+```
+## Use AWS Public Gallery Images to build your docker Image 
+```
+# syntax=docker/dockerfile:1
+
+# STAGE 1: Build the Angular project
+FROM public.ecr.aws/docker/library/node:20 AS builder
+
+# Install Angular CLI
+RUN npm install -g @angular/cli@17
+
+# Change my working directory to a custom folder created for the project
+WORKDIR /my-project
+
+# Copy everything from the current folder (except the ones in .dockerignore) 
+# into my working directory on the image
+COPY . .
+
+# Install dependencies and build my Angular project
+RUN npm install && ng build -c production
+
+
+# STAGE 2: Build the final deployable image
+FROM public.ecr.aws/docker/library/nginx:1.25
+
+# Allow the HTTP port needed by the Nginx server for connections
+EXPOSE 80
+
+# Copy the generated static files from the builder stage
+# to the Nginx server's default folder on the image
+COPY --from=builder /my-project/dist/my-angular-project /usr/share/nginx/html
+
+------------------------------------
+version: 0.2
+env:
+  variables:
+    ECR_REPO_NAME: my-angular-app
+phases:
+  pre_build:
+    commands:
+      # ECR Public Gallery login
+      - aws ecr-public get-login-password --region us-east-1 | docker login -u AWS --password-stdin public.ecr.aws
+      
+      # ECR login
+      - ECR_MAIN_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+      - aws ecr get-login-password --region ${AWS_REGION} | docker login -u AWS --password-stdin ${ECR_MAIN_URI}
+
+      - ECR_IMAGE_URI="${ECR_MAIN_URI}/${ECR_REPO_NAME}:${CODEBUILD_RESOLVED_SOURCE_VERSION:0:8}"
+  build:
+    commands:
+      - docker build -t my-angular-app:latest .
+  post_build:
+    commands:
+      - docker tag my-angular-app:latest ${ECR_IMAGE_URI}
+      - docker push ${ECR_IMAGE_URI}
+
+      # Generate image definitions file for ECS
+      - printf '[{"name":"angular-app","imageUri":"%s"}]' ${ECR_IMAGE_URI} > imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
+```
+
+#### But if you rolling update failed
+ - service try to launch new tasks continually 
+
+### Rollback to rolling Update 
+- use **deployment failure detection** in service & rollback
+- **EC2 Deployment Circuit Breaker**
+  - Threshold: number of failed tasks to container an ECS rolling deployment as a failure
+  - Min threshold is 10 & Max threshold is 200.
+    - How to calculate circuit brake threshold
+      - Desire tasks = 2
+      - .5* desired taks = .5*2 = 1
+      -  1 <10 
+      - Threshold = 10
+      - 10 task failure are needed for ECS rolling deployment to be considered as a failure.
+- **Deployment circut braker** if the service can't reach a steady state because of task failed to launch, the deployment fails.
+- **Min and Max task in rolling Update**
+  - Update Service and update min & max for new deploymeny if Min=50 is 50% * desired task  Max=150%* disired task
+  - Total taske = Max - min
+- **Deployment rollback**
+- 
+# AWS Capacity Provider 
+
+# AWS Cluster
+
+# ECS services on ASG Capacity providers for Rolling Deployment.
+- Create service and define capacity provide ec2 not use default { When configure cluster }
